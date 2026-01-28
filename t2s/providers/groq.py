@@ -5,19 +5,35 @@ import httpx
 
 from .base import LLMProvider
 
+
 class GroqProvider(LLMProvider):
-    """Calls Groq's OpenAI-compatible Chat Completions endpoint."""
+    """Calls Groq's OpenAI-compatible Chat Completions endpoint.
+
+    Works with GROQ_BASE_URL set to either:
+      - https://api.groq.com
+      - https://api.groq.com/openai/v1
+    """
 
     def __init__(self, *, api_key: str, base_url: str, model: str, timeout_s: float = 60.0):
         if not api_key:
             raise ValueError("GROQ_API_KEY is missing. Set it in .env.")
-        self.api_key = api_key
-        self.base_url = base_url.rstrip("/")
+        self.api_key = api_key.strip()
+        self.base_url = (base_url or "https://api.groq.com").strip().rstrip("/")
         self.model = model
         self.timeout_s = timeout_s
 
     def _headers(self) -> Dict[str, str]:
-        return {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        return {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+    def _endpoint(self, path: str) -> str:
+        """Return a full endpoint URL for OpenAI-compatible routes."""
+        # Normalize whether base_url includes /openai/v1 or not
+        if self.base_url.endswith("/openai/v1"):
+            return f"{self.base_url}{path}"
+        return f"{self.base_url}/openai/v1{path}"
 
     def _payload(self, system_prompt: str, user_prompt: str, stream: bool) -> Dict[str, Any]:
         return {
@@ -31,30 +47,43 @@ class GroqProvider(LLMProvider):
         }
 
     def generate_sql(self, *, system_prompt: str, user_prompt: str) -> str:
-        url = f"{self.base_url}/chat/completions"
+        url = self._endpoint("/chat/completions")
         payload = self._payload(system_prompt, user_prompt, stream=False)
+
         with httpx.Client(timeout=self.timeout_s) as client:
             r = client.post(url, headers=self._headers(), json=payload)
-            r.raise_for_status()
-            data = r.json()
+
+        # Better error message (shows Groq JSON error details)
+        if r.status_code >= 400:
+            raise RuntimeError(f"Groq API error {r.status_code}: {r.text}")
+
+        data = r.json()
         return (data["choices"][0]["message"]["content"] or "").strip()
 
     def generate_sql_stream(self, *, system_prompt: str, user_prompt: str) -> Iterable[str]:
-        url = f"{self.base_url}/chat/completions"
+        url = self._endpoint("/chat/completions")
         payload = self._payload(system_prompt, user_prompt, stream=True)
+
         with httpx.Client(timeout=self.timeout_s) as client:
             with client.stream("POST", url, headers=self._headers(), json=payload) as r:
-                r.raise_for_status()
+                if r.status_code >= 400:
+                    body = r.read().decode("utf-8", errors="replace")
+                    raise RuntimeError(f"Groq API error {r.status_code}: {body}")
+
                 for line in r.iter_lines():
                     if not line:
                         continue
-                    # OpenAI-style SSE-ish lines: "data: {...}"
-                    if line.startswith(b"data:"):
-                        line = line[len(b"data:"):].strip()
-                    if line == b"[DONE]":
+                    # decode bytes to str for startswith and further processing
+                    if isinstance(line, bytes):
+                        line_str = line.decode("utf-8", errors="replace")
+                    else:
+                        line_str = line
+                    if line_str.startswith("data:"):
+                        line_str = line_str[len("data:"):].strip()
+                    if line_str == "[DONE]":
                         break
                     try:
-                        obj = httpx.Response(200, content=line).json()
+                        obj = httpx.Response(200, content=line_str.encode("utf-8")).json()
                     except Exception:
                         continue
                     delta = obj.get("choices", [{}])[0].get("delta", {})
