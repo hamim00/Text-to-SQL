@@ -1,17 +1,23 @@
 from __future__ import annotations
 
-from typing import Iterable, Dict, Any, Optional
+from typing import Iterable, Dict, Any
 import httpx
 
 from .base import LLMProvider
 
+
 class OllamaProvider(LLMProvider):
-    def __init__(self, *, base_url: str, model: str, timeout_s: float = 60.0):
+    def __init__(self, *, base_url: str, model: str, max_output_tokens: int = 256, timeout_s: float = 60.0):
         self.base_url = base_url.rstrip("/")
         self.model = model
+        self.max_output_tokens = int(max_output_tokens) if max_output_tokens else 0
         self.timeout_s = timeout_s
 
     def _payload(self, system_prompt: str, user_prompt: str, stream: bool) -> Dict[str, Any]:
+        options: Dict[str, Any] = {"temperature": 0.1}
+        if self.max_output_tokens and self.max_output_tokens > 0:
+            options["num_predict"] = self.max_output_tokens
+
         return {
             "model": self.model,
             "stream": stream,
@@ -19,8 +25,7 @@ class OllamaProvider(LLMProvider):
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            # keep deterministic-ish for SQL generation
-            "options": {"temperature": 0.1},
+            "options": options,
         }
 
     def generate_sql(self, *, system_prompt: str, user_prompt: str) -> str:
@@ -30,8 +35,7 @@ class OllamaProvider(LLMProvider):
             r = client.post(url, json=payload)
             r.raise_for_status()
             data = r.json()
-        content = data.get("message", {}).get("content", "")
-        return content.strip()
+        return (data.get("message", {}).get("content", "") or "").strip()
 
     def generate_sql_stream(self, *, system_prompt: str, user_prompt: str) -> Iterable[str]:
         url = f"{self.base_url}/api/chat"
@@ -42,7 +46,6 @@ class OllamaProvider(LLMProvider):
                 for line in r.iter_lines():
                     if not line:
                         continue
-                    # Ollama streams JSON per line
                     try:
                         obj = httpx.Response(200, content=line).json()
                     except Exception:
