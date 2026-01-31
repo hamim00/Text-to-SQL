@@ -14,12 +14,13 @@ class GroqProvider(LLMProvider):
       - https://api.groq.com/openai/v1
     """
 
-    def __init__(self, *, api_key: str, base_url: str, model: str, timeout_s: float = 60.0):
+    def __init__(self, *, api_key: str, base_url: str, model: str, max_output_tokens: int = 256, timeout_s: float = 60.0):
         if not api_key:
             raise ValueError("GROQ_API_KEY is missing. Set it in .env.")
         self.api_key = api_key.strip()
         self.base_url = (base_url or "https://api.groq.com").strip().rstrip("/")
         self.model = model
+        self.max_output_tokens = int(max_output_tokens) if max_output_tokens else 0
         self.timeout_s = timeout_s
 
     def _headers(self) -> Dict[str, str]:
@@ -29,14 +30,12 @@ class GroqProvider(LLMProvider):
         }
 
     def _endpoint(self, path: str) -> str:
-        """Return a full endpoint URL for OpenAI-compatible routes."""
-        # Normalize whether base_url includes /openai/v1 or not
         if self.base_url.endswith("/openai/v1"):
             return f"{self.base_url}{path}"
         return f"{self.base_url}/openai/v1{path}"
 
     def _payload(self, system_prompt: str, user_prompt: str, stream: bool) -> Dict[str, Any]:
-        return {
+        payload: Dict[str, Any] = {
             "model": self.model,
             "stream": stream,
             "temperature": 0.1,
@@ -46,6 +45,12 @@ class GroqProvider(LLMProvider):
             ],
         }
 
+        # Groq docs recommend max_completion_tokens (max_tokens is deprecated).
+        if self.max_output_tokens and self.max_output_tokens > 0:
+            payload["max_completion_tokens"] = self.max_output_tokens
+
+        return payload
+
     def generate_sql(self, *, system_prompt: str, user_prompt: str) -> str:
         url = self._endpoint("/chat/completions")
         payload = self._payload(system_prompt, user_prompt, stream=False)
@@ -53,7 +58,6 @@ class GroqProvider(LLMProvider):
         with httpx.Client(timeout=self.timeout_s) as client:
             r = client.post(url, headers=self._headers(), json=payload)
 
-        # Better error message (shows Groq JSON error details)
         if r.status_code >= 400:
             raise RuntimeError(f"Groq API error {r.status_code}: {r.text}")
 
@@ -73,17 +77,12 @@ class GroqProvider(LLMProvider):
                 for line in r.iter_lines():
                     if not line:
                         continue
-                    # decode bytes to str for startswith and further processing
-                    if isinstance(line, bytes):
-                        line_str = line.decode("utf-8", errors="replace")
-                    else:
-                        line_str = line
-                    if line_str.startswith("data:"):
-                        line_str = line_str[len("data:"):].strip()
-                    if line_str == "[DONE]":
+                    if line.startswith(b"data:"):
+                        line = line[len(b"data:"):].strip()
+                    if line == b"[DONE]":
                         break
                     try:
-                        obj = httpx.Response(200, content=line_str.encode("utf-8")).json()
+                        obj = httpx.Response(200, content=line).json()
                     except Exception:
                         continue
                     delta = obj.get("choices", [{}])[0].get("delta", {})
