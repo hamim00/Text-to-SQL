@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "safe-schema-text-to-sql"
+version = "0.1.0"
+description = "Safe schema-aware Text-to-SQL with Groq/Ollama and Streamlit UI"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["t2s*"]
