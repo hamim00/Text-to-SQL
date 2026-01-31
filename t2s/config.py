@@ -16,6 +16,12 @@ class Settings:
     log_db_path: str = os.getenv("T2S_LOG_DB_PATH", "./data/t2s_log.db")
     history_limit: int = int(os.getenv("T2S_HISTORY_LIMIT", "20"))
 
+    # Guardrails (Phase 3.2)
+    max_output_tokens: int = int(os.getenv("T2S_MAX_OUTPUT_TOKENS", "256"))
+    max_input_chars: int = int(os.getenv("T2S_MAX_INPUT_CHARS", "500"))
+    rate_limit_max_requests: int = int(os.getenv("T2S_RATE_LIMIT_MAX_REQUESTS", "15"))
+    rate_limit_window_sec: int = int(os.getenv("T2S_RATE_LIMIT_WINDOW_SEC", "60"))
+
     # Groq (OpenAI-compatible)
     groq_api_key: str = os.getenv("GROQ_API_KEY", "")
     groq_model: str = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
