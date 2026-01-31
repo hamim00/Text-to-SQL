@@ -18,29 +18,21 @@ class SQLSafetyError(ValueError):
 
 
 def extract_sql_candidate(text: str) -> str:
-    """Extract SQL from common LLM response formats."""
+    """Extract SQL from common LLM response formats (no multi-statement truncation)."""
     if not text:
         return ""
     t = text.strip()
 
-    # Strip ```sql ... ```
     if t.startswith("```"):
         t = re.sub(r"^```(?:sql)?\s*", "", t, flags=re.IGNORECASE)
         t = re.sub(r"\s*```\s*$", "", t)
         t = t.strip()
 
-    # Strip "SQL:" / "Query:"
     t = re.sub(r"^(sql\s*:|query\s*:)", "", t, flags=re.IGNORECASE).strip()
 
-    # Jump to first SELECT/WITH if there's leading explanation
     m = re.search(r"\b(SELECT|WITH)\b", t, flags=re.IGNORECASE)
     if m and m.start() > 0:
         t = t[m.start():].strip()
-
-    # Keep only first statement if semicolon exists
-    semi = t.find(";")
-    if semi != -1:
-        t = t[: semi + 1].strip()
 
     return t
 
@@ -60,7 +52,6 @@ def _strip_trailing_semicolons(sql: str) -> str:
 
 
 def _has_top_level_limit(sql_no_sc: str) -> bool:
-    # LIMIT at the end (optionally OFFSET)
     return bool(
         re.search(r"\bLIMIT\b\s+\d+\s*(?:\bOFFSET\b\s+\d+\s*)?$", sql_no_sc, flags=re.IGNORECASE)
     )
@@ -71,9 +62,13 @@ def validate_and_rewrite_select(sql: str, *, dialect: str = "sqlite", default_li
     if not candidate:
         raise SQLSafetyError("Empty SQL produced by provider.")
 
-    # Validate: parse & single statement
+    s = candidate.strip()
+    s_no_trailing = _strip_trailing_semicolons(s)
+    if ";" in s_no_trailing:
+        raise SQLSafetyError("Multiple statements detected (semicolon in the middle).")
+
     try:
-        statements = sqlglot.parse(candidate, read=dialect)
+        statements = sqlglot.parse(s_no_trailing, read=dialect)
     except Exception as e:
         raise SQLSafetyError(f"SQL parse error: {e}") from e
 
@@ -87,21 +82,18 @@ def validate_and_rewrite_select(sql: str, *, dialect: str = "sqlite", default_li
     if not _is_select_statement(tree):
         raise SQLSafetyError("Only SELECT queries are allowed.")
 
-    # Enforce LIMIT by string editing (avoid sqlglot AST serialization quirks)
-    s = _strip_trailing_semicolons(candidate)
     limit_added = False
+    s_work = s_no_trailing.strip()
 
-    # Repair common truncation: query ends with LIMIT (no number)
-    if re.search(r"\bLIMIT\b\s*$", s, flags=re.IGNORECASE):
-        s = re.sub(r"\bLIMIT\b\s*$", f"LIMIT {default_limit}", s, flags=re.IGNORECASE)
+    if re.search(r"\bLIMIT\b\s*$", s_work, flags=re.IGNORECASE):
+        s_work = re.sub(r"\bLIMIT\b\s*$", f"LIMIT {default_limit}", s_work, flags=re.IGNORECASE)
         limit_added = True
 
-    # If no top-level LIMIT, append one
-    if not _has_top_level_limit(s) and not re.search(r"\bLIMIT\b\s+\d+", s, flags=re.IGNORECASE):
-        s = f"{s} LIMIT {default_limit}"
+    if not _has_top_level_limit(s_work) and not re.search(r"\bLIMIT\b\s+\d+", s_work, flags=re.IGNORECASE):
+        s_work = f"{s_work} LIMIT {default_limit}"
         limit_added = True
 
-    safe_sql = s.strip()
+    safe_sql = s_work.strip()
     if not safe_sql.endswith(";"):
         safe_sql += ";"
 
