@@ -13,6 +13,14 @@ from uuid import uuid4
 from pathlib import Path
 import streamlit as st
 
+# Override settings from secrets if available
+if hasattr(st, 'secrets'):
+    import os
+    for key in ['T2S_PROVIDER', 'GROQ_API_KEY', 'GROQ_MODEL', 'GROQ_BASE_URL', 
+                'T2S_DB_PATH', 'T2S_DB_DIALECT', 'T2S_LOG_DB_PATH']:
+        if key in st.secrets:
+            os.environ[key] = st.secrets[key]
+            
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
