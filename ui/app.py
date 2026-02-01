@@ -425,7 +425,11 @@ def _prepare_for_execute(sql: str) -> str:
 
 
 def _current_model() -> str:
-    return SETTINGS.groq_model if SETTINGS.provider == "groq" else SETTINGS.ollama_model
+    # Some Settings implementations may not have provider-specific model attributes
+    # Use attribute lookup with fallbacks to avoid attribute errors in type checking
+    if SETTINGS.provider == "groq":
+        return getattr(SETTINGS, "groq_model", getattr(SETTINGS, "model", ""))
+    return getattr(SETTINGS, "ollama_model", getattr(SETTINGS, "model", ""))
 
 
 def _get_client_key() -> str:
