@@ -1,6 +1,8 @@
+# Core app
 streamlit==1.41.1
-httpx==0.27.2
+httpx==0.25.2
 python-dotenv==1.0.1
 sqlglot==25.24.3
-pydantic==2.10.4
+
+# CI / tests
 pytest==8.3.4
